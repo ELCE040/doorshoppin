@@ -1,0 +1,24 @@
+{
+  "project_info": {
+    "project_number": "589803206897",
+    "project_id": "doorshoppin-7f073",
+    "storage_bucket": "doorshoppin-7f073.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:589803206897:android:7dc29ad454b67fbe2e1150",
+        "android_client_info": {
+          "package_name": "com.doorshoppin.doorshoppin_management"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-Nj1jnAXOUldaL_WtOr-i9dvJhd4SeUM"
+        }
+      ]
+    }
+  ],
+  "configuration_version": "1"
+}
