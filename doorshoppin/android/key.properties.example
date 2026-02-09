@@ -1,0 +1,8 @@
+# Copy this file to key.properties and fill in your release keystore details.
+# Do NOT commit key.properties or your .jks/.keystore file to version control.
+# See PUBLISHING.md for how to create the keystore and upload to Play Console.
+
+storePassword=your_keystore_password
+keyPassword=your_key_password
+keyAlias=upload
+storeFile=../upload-keystore.jks
