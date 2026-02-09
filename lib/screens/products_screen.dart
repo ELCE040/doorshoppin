@@ -236,6 +236,47 @@ class _CategoryChip extends StatelessWidget {
   }
 }
 
+class _ProductImage extends StatelessWidget {
+  const _ProductImage({
+    required this.imagePath,
+    required this.placeholder,
+    required this.fit,
+    this.width,
+    this.height,
+    this.loadingBuilder,
+  });
+
+  final String? imagePath;
+  final Widget placeholder;
+  final BoxFit fit;
+  final double? width;
+  final double? height;
+  final Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = ApiConfig.productImageUrls(imagePath);
+    if (urls.isEmpty) return placeholder;
+    return _buildNetwork(urls, 0);
+  }
+
+  Widget _buildNetwork(List<String> urls, int index) {
+    return Image.network(
+      urls[index],
+      fit: fit,
+      width: width,
+      height: height,
+      loadingBuilder: loadingBuilder,
+      errorBuilder: (_, __, ___) {
+        if (index + 1 < urls.length) {
+          return _buildNetwork(urls, index + 1);
+        }
+        return placeholder;
+      },
+    );
+  }
+}
+
 class _ProductGridCard extends StatelessWidget {
   final Map<String, dynamic> product;
   final VoidCallback onTap;
@@ -244,7 +285,7 @@ class _ProductGridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = ApiConfig.productImageUrl(product['imageUrl']?.toString() ?? product['image_path']?.toString());
+    final imagePath = product['imageUrl']?.toString() ?? product['image_path']?.toString();
     final price = product['price'] is num ? (product['price'] as num).toDouble() : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
     final category = product['category']?.toString() ?? '';
 
@@ -259,33 +300,28 @@ class _ProductGridCard extends StatelessWidget {
           children: [
             Expanded(
               flex: 3,
-              child: imageUrl.isEmpty
-                  ? Container(
-                      color: Colors.grey.shade200,
-                      child: const Icon(Icons.inventory_2, size: 48, color: appGreen),
-                    )
-                  : Image.network(
-                      imageUrl,
-                      fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return Container(
-                          color: Colors.grey.shade200,
-                          child: Center(
-                            child: CircularProgressIndicator(
-                              value: loadingProgress.expectedTotalBytes != null
-                                  ? loadingProgress.cumulativeBytesLoaded / (loadingProgress.expectedTotalBytes!)
-                                  : null,
-                              color: appGreen,
-                            ),
-                          ),
-                        );
-                      },
-                      errorBuilder: (_, __, ___) => Container(
-                        color: Colors.grey.shade200,
-                        child: const Icon(Icons.broken_image_outlined, size: 48, color: appGreen),
+              child: _ProductImage(
+                imagePath: imagePath,
+                fit: BoxFit.cover,
+                placeholder: Container(
+                  color: Colors.grey.shade200,
+                  child: const Icon(Icons.inventory_2, size: 48, color: appGreen),
+                ),
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
+                    color: Colors.grey.shade200,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        value: loadingProgress.expectedTotalBytes != null
+                            ? loadingProgress.cumulativeBytesLoaded / (loadingProgress.expectedTotalBytes!)
+                            : null,
+                        color: appGreen,
                       ),
                     ),
+                  );
+                },
+              ),
             ),
             Expanded(
               flex: 2,
@@ -336,7 +372,7 @@ class ProductDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = ApiConfig.productImageUrl(product['imageUrl']?.toString() ?? product['image_path']?.toString());
+    final imagePath = product['imageUrl']?.toString() ?? product['image_path']?.toString();
     final price = product['price'] is num ? (product['price'] as num).toDouble() : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
 
     return Scaffold(
@@ -361,35 +397,29 @@ class ProductDetailPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (imageUrl.isEmpty)
-              Container(
+            SizedBox(
+              height: 220,
+              child: _ProductImage(
+                imagePath: imagePath,
+                fit: BoxFit.cover,
                 height: 220,
-                color: Colors.grey.shade200,
-                child: const Center(child: Icon(Icons.inventory_2, size: 80, color: appGreen)),
-              )
-            else
-              SizedBox(
-                height: 220,
-                child: Image.network(
-                  imageUrl,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Container(
-                      height: 220,
-                      color: Colors.grey.shade200,
-                      child: Center(
-                        child: CircularProgressIndicator(color: appGreen),
-                      ),
-                    );
-                  },
-                  errorBuilder: (_, __, ___) => Container(
+                placeholder: Container(
+                  height: 220,
+                  color: Colors.grey.shade200,
+                  child: const Center(child: Icon(Icons.inventory_2, size: 80, color: appGreen)),
+                ),
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
                     height: 220,
                     color: Colors.grey.shade200,
-                    child: const Center(child: Icon(Icons.broken_image_outlined, size: 80, color: appGreen)),
-                  ),
-                ),
+                    child: const Center(
+                      child: CircularProgressIndicator(color: appGreen),
+                    ),
+                  );
+                },
               ),
+            ),
             Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -648,12 +678,12 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
                 child: hasPreview
                     ? _pickedFilePath != null
                         ? Image.file(File(_pickedFilePath!), fit: BoxFit.cover, width: double.infinity, height: double.infinity)
-                        : Image.network(
-                            ApiConfig.productImageUrl(_existingImagePath),
+                        : _ProductImage(
+                            imagePath: _existingImagePath,
                             fit: BoxFit.cover,
                             width: double.infinity,
                             height: double.infinity,
-                            errorBuilder: (_, __, ___) => _placeholder(),
+                            placeholder: _placeholder(),
                           )
                     : _placeholder(),
               ),

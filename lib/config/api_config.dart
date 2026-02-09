@@ -113,4 +113,31 @@ class ApiConfig {
     final sep = baseUrl.contains('?') ? '&' : '?';
     return '$baseUrl${sep}v=${Uri.encodeComponent(pathSegment)}';
   }
+
+  /// Returns candidate URLs for a product image.
+  /// 
+  /// Some deployments expose Node uploads at:
+  ///   - https://site/doorshoppin_backend/uploads/...
+  /// Others expose them at:
+  ///   - https://site/uploads/...
+  /// 
+  /// We return a primary URL plus a safe fallback so updated images load
+  /// even if the uploads route is proxied differently.
+  static List<String> productImageUrls(String? imageUrl) {
+    if (imageUrl == null || imageUrl.trim().isEmpty) return const [];
+    final primary = productImageUrl(imageUrl);
+    if (primary.isEmpty) return const [];
+    final urls = <String>[primary];
+
+    final raw = imageUrl.trim();
+    if (_isNodeUpload(raw)) {
+      final filename = _extractNodeFilename(raw);
+      if (filename.isNotEmpty) {
+        final path = '/uploads/$filename';
+        final fallback = _appendCacheBuster(siteBaseUrl + path, path);
+        if (!urls.contains(fallback)) urls.add(fallback);
+      }
+    }
+    return urls;
+  }
 }
