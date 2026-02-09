@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../config/api_config.dart';
 import '../services/api_service.dart';
+import '../widgets/product_image.dart';
 
 /// Fixed categories for filter and form (Drinks, Kids, Stationery).
 List<String> get _productCategories => List.from(ApiConfig.productCategories);
@@ -236,47 +237,6 @@ class _CategoryChip extends StatelessWidget {
   }
 }
 
-class _ProductImage extends StatelessWidget {
-  const _ProductImage({
-    required this.imagePath,
-    required this.placeholder,
-    required this.fit,
-    this.width,
-    this.height,
-    this.loadingBuilder,
-  });
-
-  final String? imagePath;
-  final Widget placeholder;
-  final BoxFit fit;
-  final double? width;
-  final double? height;
-  final Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder;
-
-  @override
-  Widget build(BuildContext context) {
-    final urls = ApiConfig.productImageUrls(imagePath);
-    if (urls.isEmpty) return placeholder;
-    return _buildNetwork(urls, 0);
-  }
-
-  Widget _buildNetwork(List<String> urls, int index) {
-    return Image.network(
-      urls[index],
-      fit: fit,
-      width: width,
-      height: height,
-      loadingBuilder: loadingBuilder,
-      errorBuilder: (_, __, ___) {
-        if (index + 1 < urls.length) {
-          return _buildNetwork(urls, index + 1);
-        }
-        return placeholder;
-      },
-    );
-  }
-}
-
 class _ProductGridCard extends StatelessWidget {
   final Map<String, dynamic> product;
   final VoidCallback onTap;
@@ -300,7 +260,7 @@ class _ProductGridCard extends StatelessWidget {
           children: [
             Expanded(
               flex: 3,
-              child: _ProductImage(
+              child: ProductImage(
                 imagePath: imagePath,
                 fit: BoxFit.cover,
                 placeholder: Container(
@@ -399,7 +359,7 @@ class ProductDetailPage extends StatelessWidget {
           children: [
             SizedBox(
               height: 220,
-              child: _ProductImage(
+              child: ProductImage(
                 imagePath: imagePath,
                 fit: BoxFit.cover,
                 height: 220,
@@ -678,7 +638,7 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
                 child: hasPreview
                     ? _pickedFilePath != null
                         ? Image.file(File(_pickedFilePath!), fit: BoxFit.cover, width: double.infinity, height: double.infinity)
-                        : _ProductImage(
+                        : ProductImage(
                             imagePath: _existingImagePath,
                             fit: BoxFit.cover,
                             width: double.infinity,
