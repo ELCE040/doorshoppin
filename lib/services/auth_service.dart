@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
@@ -32,6 +33,11 @@ class AuthService {
     final hasToken = token != null && token.isNotEmpty;
     debugPrint('[AuthService] isLoggedIn: hasToken=$hasToken');
     if (!hasToken) return false;
+    if (_isTokenExpired(token!)) {
+      debugPrint('[AuthService] isLoggedIn: stored token is expired, logging out');
+      await logout();
+      return false;
+    }
     ApiService.setToken(token);
     return true;
   }
@@ -55,5 +61,28 @@ class AuthService {
     await prefs.remove(_keyIsManager);
     ApiService.setToken(null);
     debugPrint('[AuthService] logout done');
+  }
+
+  /// Best-effort JWT expiry validation so we don't restore obviously expired sessions.
+  /// Returns false for non-JWT tokens or malformed payloads.
+  static bool _isTokenExpired(String token) {
+    final parts = token.split('.');
+    if (parts.length < 2) return false;
+    try {
+      final normalizedPayload = base64Url.normalize(parts[1]);
+      final decodedPayload = utf8.decode(base64Url.decode(normalizedPayload));
+      final payload = jsonDecode(decodedPayload);
+      if (payload is! Map<String, dynamic>) return false;
+      final rawExp = payload['exp'];
+      final expSeconds = rawExp is int ? rawExp : int.tryParse(rawExp?.toString() ?? '');
+      if (expSeconds == null || expSeconds <= 0) return false;
+
+      final expiryUtc = DateTime.fromMillisecondsSinceEpoch(expSeconds * 1000, isUtc: true);
+      final nowWithSkew = DateTime.now().toUtc().add(const Duration(seconds: 30));
+      return !nowWithSkew.isBefore(expiryUtc);
+    } catch (e) {
+      debugPrint('[AuthService] _isTokenExpired parse failed: $e');
+      return false;
+    }
   }
 }

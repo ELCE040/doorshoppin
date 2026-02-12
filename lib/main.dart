@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'services/api_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
 import 'screens/login_screen.dart';
@@ -18,6 +19,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  ApiService.setSessionExpiredHandler(_handleSessionExpired);
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     await NotificationService.initialize(navigatorKey, onShowInAppBannerCallback: showTopNotificationBanner);
@@ -25,6 +27,20 @@ void main() async {
     debugPrint('Firebase init: $e');
   }
   runApp(const DoorShoppinManagementApp());
+}
+
+void _handleSessionExpired() {
+  debugPrint('[App] Session expired. Logging out and returning to login screen.');
+  AuthService.logout().whenComplete(() {
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.pushNamedAndRemoveUntil(LoginScreen.routeName, (_) => false);
+      });
+      return;
+    }
+    nav.pushNamedAndRemoveUntil(LoginScreen.routeName, (_) => false);
+  });
 }
 
 /// Shows a WhatsApp-style notification banner at the top, then auto-dismisses.

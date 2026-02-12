@@ -5,11 +5,62 @@ import '../config/api_config.dart';
 import '../models/dashboard_model.dart';
 import '../models/order_model.dart';
 
+class SessionExpiredException implements Exception {
+  final String message;
+  const SessionExpiredException([this.message = 'Session expired. Please sign in again.']);
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   static String? _token;
+  static VoidCallback? _sessionExpiredHandler;
+  static bool _didNotifySessionExpiry = false;
+
+  static void setSessionExpiredHandler(VoidCallback? handler) {
+    _sessionExpiredHandler = handler;
+    _didNotifySessionExpiry = false;
+  }
 
   static void setToken(String? token) {
     _token = token;
+    if (token != null && token.isNotEmpty) {
+      _didNotifySessionExpiry = false;
+    }
+  }
+
+  static void _notifySessionExpiredOnce() {
+    if (_didNotifySessionExpiry) return;
+    _didNotifySessionExpiry = true;
+    _sessionExpiredHandler?.call();
+  }
+
+  static String _extractErrorMessage(Map<String, dynamic> json) {
+    final v = json['error'] ?? json['message'] ?? json['detail'] ?? json['msg'];
+    return v?.toString() ?? '';
+  }
+
+  static bool _looksLikeSessionExpired(int statusCode, String messageLower) {
+    if (messageLower.contains('session expired')) return true;
+    if (messageLower.contains('jwt') && messageLower.contains('expired')) return true;
+    if (messageLower.contains('token') && messageLower.contains('expired')) return true;
+    if (statusCode == 401 && messageLower.contains('invalid token')) return true;
+    if (statusCode == 401 && messageLower.contains('unauthorized')) return true;
+    if (statusCode == 401 && messageLower.contains('not authenticated')) return true;
+    if (statusCode == 401 && messageLower.contains('authentication required')) return true;
+    if (statusCode == 401 && messageLower.trim().isEmpty) return true;
+    return false;
+  }
+
+  static void _maybeThrowSessionExpired(int statusCode, Map<String, dynamic> data, String context) {
+    if (context == 'adminLogin') return;
+    final messageLower = _extractErrorMessage(data).toLowerCase();
+    if (_looksLikeSessionExpired(statusCode, messageLower)) {
+      debugPrint('[ApiService] session expired in $context (status=$statusCode, msg=$messageLower)');
+      _notifySessionExpiredOnce();
+      throw const SessionExpiredException();
+    }
   }
 
   /// Parse response body as JSON. Throws a clear message if server returned HTML (e.g. 503 proxy error).
@@ -17,17 +68,29 @@ class ApiService {
     final raw = body is String ? body : body.toString();
     final trimmed = raw.trim();
     if (trimmed.isEmpty) {
+      if (statusCode == 401 && context != 'adminLogin') {
+        _notifySessionExpiredOnce();
+        throw const SessionExpiredException();
+      }
       if (statusCode >= 500) throw Exception('Server unavailable ($statusCode). Please try again later.');
       return {};
     }
     if (trimmed.startsWith('<')) {
+      if (statusCode == 401 && context != 'adminLogin') {
+        _notifySessionExpiredOnce();
+        throw const SessionExpiredException();
+      }
       if (statusCode == 503) {
         throw Exception('Server temporarily unavailable. Please try again in a few moments.');
       }
       throw Exception('Server returned an error ($statusCode). Please try again later.');
     }
     try {
-      return jsonDecode(raw) as Map<String, dynamic>? ?? {};
+      final data = jsonDecode(raw) as Map<String, dynamic>? ?? {};
+      _maybeThrowSessionExpired(statusCode, data, context);
+      return data;
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       if (statusCode >= 500) throw Exception('Server unavailable ($statusCode). Please try again later.');
       throw Exception('Invalid server response. Please try again.');
@@ -49,7 +112,7 @@ class ApiService {
     try {
       final res = await http.post(
         Uri.parse(url),
-        headers: _headers,
+        headers: const {'Content-Type': 'application/json'},
         body: jsonEncode({'username': username, 'password': password}),
       );
       final rawBody = res.body is String ? res.body as String : res.body.toString();
@@ -59,7 +122,7 @@ class ApiService {
       }
       final data = _parseJson(rawBody, res.statusCode, 'adminLogin');
       if (res.statusCode == 200 && data['success'] == true) {
-        _token = data['token']?.toString();
+        setToken(data['token']?.toString());
         debugPrint('[Admin Login] success, admin id: ${data['admin']?['id']}');
         return data;
       }
