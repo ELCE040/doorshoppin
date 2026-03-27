@@ -30,7 +30,9 @@ class ApiConfig {
     if (imageUrl == null || imageUrl.trim().isEmpty) return '';
     
     String s = imageUrl.trim();
-    final bool isNodeUpload = _isNodeUpload(s);
+    final bool isExplicitAdminUpload = _isExplicitAdminUploadPath(s);
+    // If backend already points to /admin/uploads, keep it on that path.
+    final bool isNodeUpload = !isExplicitAdminUpload && _isNodeUpload(s);
     
     // Handle absolute URLs
     if (s.startsWith('http://') || s.startsWith('https://')) {
@@ -77,6 +79,11 @@ class ApiConfig {
     // Extract just the filename from path or URL
     final filename = _extractFilename(s);
     return _nodeUploadPattern.hasMatch(filename);
+  }
+
+  /// True when path/URL already targets legacy PHP uploads directory.
+  static bool _isExplicitAdminUploadPath(String s) {
+    return s.contains('/admin/uploads/') || s.startsWith('admin/uploads/');
   }
 
   /// Extracts the filename from a path or full URL.
