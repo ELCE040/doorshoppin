@@ -29,8 +29,16 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   List<Map<String, dynamic>> get _filteredProducts {
     var list = _products;
-    if (_selectedCategory != null && _selectedCategory!.isNotEmpty && _selectedCategory != 'all') {
-      list = list.where((p) => (p['category']?.toString() ?? '').toLowerCase() == _selectedCategory!.toLowerCase()).toList();
+    if (_selectedCategory != null &&
+        _selectedCategory!.isNotEmpty &&
+        _selectedCategory != 'all') {
+      list = list
+          .where(
+            (p) =>
+                (p['category']?.toString() ?? '').toLowerCase() ==
+                _selectedCategory!.toLowerCase(),
+          )
+          .toList();
     }
     if (_searchQuery.trim().isNotEmpty) {
       final q = _searchQuery.trim().toLowerCase();
@@ -51,7 +59,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
   void initState() {
     super.initState();
     _load();
-    _searchController.addListener(() => setState(() => _searchQuery = _searchController.text));
+    _searchController.addListener(
+      () => setState(() => _searchQuery = _searchController.text),
+    );
   }
 
   @override
@@ -61,12 +71,21 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final list = await ApiService.getAdminProducts();
-      setState(() { _products = list; _loading = false; });
+      setState(() {
+        _products = list;
+        _loading = false;
+      });
     } catch (e) {
-      setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _loading = false; });
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
     }
   }
 
@@ -90,119 +109,160 @@ class _ProductsScreenState extends State<ProductsScreen> {
       backgroundColor: Colors.grey.shade50,
       appBar: widget.showAppBar
           ? AppBar(
-              title: const Text('Products', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              title: const Text(
+                'Products',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               backgroundColor: appGreen,
               foregroundColor: Colors.white,
               actions: [
-                IconButton(icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _loading ? null : _load,
+                ),
               ],
             )
           : null,
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: appGreen))
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _load,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: appGreen,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search products...',
+                      prefixIcon: const Icon(Icons.search, color: appGreen),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                    onTap: () {},
+                  ),
+                ),
+                SizedBox(
+                  height: 44,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     children: [
-                      Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _load,
-                        style: ElevatedButton.styleFrom(backgroundColor: appGreen, foregroundColor: Colors.white),
-                        child: const Text('Retry'),
+                      _CategoryChip(
+                        label: 'All',
+                        selected:
+                            _selectedCategory == null ||
+                            _selectedCategory == 'all',
+                        onTap: () => setState(() => _selectedCategory = null),
+                      ),
+                      ..._categories.map(
+                        (c) => _CategoryChip(
+                          label: c,
+                          selected:
+                              _selectedCategory?.toLowerCase() ==
+                              c.toLowerCase(),
+                          onTap: () => setState(() => _selectedCategory = c),
+                        ),
                       ),
                     ],
                   ),
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search products...',
-                          prefixIcon: const Icon(Icons.search, color: appGreen),
-                          filled: true,
-                          fillColor: Colors.white,
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        ),
-                        onTap: () {},
-                      ),
-                    ),
-                    SizedBox(
-                      height: 44,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        children: [
-                          _CategoryChip(
-                            label: 'All',
-                            selected: _selectedCategory == null || _selectedCategory == 'all',
-                            onTap: () => setState(() => _selectedCategory = null),
-                          ),
-                          ..._categories.map((c) => _CategoryChip(
-                                label: c,
-                                selected: _selectedCategory?.toLowerCase() == c.toLowerCase(),
-                                onTap: () => setState(() => _selectedCategory = c),
-                              )),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: RefreshIndicator(
-                        onRefresh: _load,
-                        color: appGreen,
-                        child: _filteredProducts.isEmpty
-                            ? Center(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.search_off, size: 64, color: Colors.grey.shade400),
-                                    const SizedBox(height: 16),
-                                    Text(
-                                      _searchQuery.isNotEmpty || (_selectedCategory != null && _selectedCategory != 'all')
-                                          ? 'No products match'
-                                          : 'No products',
-                                      style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
-                                    ),
-                                    if (_products.isEmpty) ...[
-                                      const SizedBox(height: 8),
-                                      ElevatedButton.icon(
-                                        onPressed: _showAddProduct,
-                                        icon: const Icon(Icons.add),
-                                        label: const Text('Add product'),
-                                        style: ElevatedButton.styleFrom(backgroundColor: appGreen, foregroundColor: Colors.white),
-                                      ),
-                                    ],
-                                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _load,
+                    color: appGreen,
+                    child: _filteredProducts.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.search_off,
+                                  size: 64,
+                                  color: Colors.grey.shade400,
                                 ),
-                              )
-                            : GridView.builder(
-                                padding: const EdgeInsets.all(12),
-                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                const SizedBox(height: 16),
+                                Text(
+                                  _searchQuery.isNotEmpty ||
+                                          (_selectedCategory != null &&
+                                              _selectedCategory != 'all')
+                                      ? 'No products match'
+                                      : 'No products',
+                                  style: TextStyle(
+                                    color: Colors.grey.shade600,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                if (_products.isEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  ElevatedButton.icon(
+                                    onPressed: _showAddProduct,
+                                    icon: const Icon(Icons.add),
+                                    label: const Text('Add product'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: appGreen,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          )
+                        : GridView.builder(
+                            padding: const EdgeInsets.all(12),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: 2,
                                   crossAxisSpacing: 12,
                                   mainAxisSpacing: 12,
                                   childAspectRatio: 0.72,
                                 ),
-                                itemCount: _filteredProducts.length,
-                                itemBuilder: (context, i) {
-                                  final p = _filteredProducts[i];
-                                  return _ProductGridCard(
-                                    product: p,
-                                    onTap: () => _openProductPage(p),
-                                  );
-                                },
-                              ),
-                      ),
-                    ),
-                  ],
+                            itemCount: _filteredProducts.length,
+                            itemBuilder: (context, i) {
+                              final p = _filteredProducts[i];
+                              return _ProductGridCard(
+                                product: p,
+                                onTap: () => _openProductPage(p),
+                              );
+                            },
+                          ),
+                  ),
                 ),
+              ],
+            ),
       floatingActionButton: !_loading && _error == null
           ? FloatingActionButton(
               onPressed: _showAddProduct,
@@ -219,7 +279,11 @@ class _CategoryChip extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _CategoryChip({required this.label, required this.selected, required this.onTap});
+  const _CategoryChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -244,8 +308,12 @@ class _ProductGridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = ApiConfig.productImageUrl(product['imageUrl']?.toString() ?? product['image_path']?.toString());
-    final price = product['price'] is num ? (product['price'] as num).toDouble() : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
+    final imageUrl = ApiConfig.productImageUrl(
+      product['imageUrl']?.toString() ?? product['image_path']?.toString(),
+    );
+    final price = product['price'] is num
+        ? (product['price'] as num).toDouble()
+        : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
     final category = product['category']?.toString() ?? '';
 
     return Card(
@@ -262,7 +330,11 @@ class _ProductGridCard extends StatelessWidget {
               child: imageUrl.isEmpty
                   ? Container(
                       color: Colors.grey.shade200,
-                      child: const Icon(Icons.inventory_2, size: 48, color: appGreen),
+                      child: const Icon(
+                        Icons.inventory_2,
+                        size: 48,
+                        color: appGreen,
+                      ),
                     )
                   : Image.network(
                       imageUrl,
@@ -274,7 +346,8 @@ class _ProductGridCard extends StatelessWidget {
                           child: Center(
                             child: CircularProgressIndicator(
                               value: loadingProgress.expectedTotalBytes != null
-                                  ? loadingProgress.cumulativeBytesLoaded / (loadingProgress.expectedTotalBytes!)
+                                  ? loadingProgress.cumulativeBytesLoaded /
+                                        (loadingProgress.expectedTotalBytes!)
                                   : null,
                               color: appGreen,
                             ),
@@ -283,7 +356,11 @@ class _ProductGridCard extends StatelessWidget {
                       },
                       errorBuilder: (_, __, ___) => Container(
                         color: Colors.grey.shade200,
-                        child: const Icon(Icons.broken_image_outlined, size: 48, color: appGreen),
+                        child: const Icon(
+                          Icons.broken_image_outlined,
+                          size: 48,
+                          color: appGreen,
+                        ),
                       ),
                     ),
             ),
@@ -303,18 +380,28 @@ class _ProductGridCard extends StatelessWidget {
                         product['name']?.toString() ?? '',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
                       ),
                       if (category.isNotEmpty)
                         Text(
                           category,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                          ),
                         ),
                       Text(
                         'MK ${price.toStringAsFixed(0)}',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: appGreen, fontSize: 13),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: appGreen,
+                          fontSize: 13,
+                        ),
                       ),
                     ],
                   ),
@@ -336,8 +423,12 @@ class ProductDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = ApiConfig.productImageUrl(product['imageUrl']?.toString() ?? product['image_path']?.toString());
-    final price = product['price'] is num ? (product['price'] as num).toDouble() : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
+    final imageUrl = ApiConfig.productImageUrl(
+      product['imageUrl']?.toString() ?? product['image_path']?.toString(),
+    );
+    final price = product['price'] is num
+        ? (product['price'] as num).toDouble()
+        : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
 
     return Scaffold(
       appBar: AppBar(
@@ -347,8 +438,10 @@ class ProductDetailPage extends StatelessWidget {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) {
-              if (v == 'edit') _openEdit(context);
-              else if (v == 'delete') _confirmDelete(context);
+              if (v == 'edit')
+                _openEdit(context);
+              else if (v == 'delete')
+                _confirmDelete(context);
             },
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'edit', child: Text('Edit')),
@@ -365,7 +458,9 @@ class ProductDetailPage extends StatelessWidget {
               Container(
                 height: 220,
                 color: Colors.grey.shade200,
-                child: const Center(child: Icon(Icons.inventory_2, size: 80, color: appGreen)),
+                child: const Center(
+                  child: Icon(Icons.inventory_2, size: 80, color: appGreen),
+                ),
               )
             else
               SizedBox(
@@ -386,7 +481,13 @@ class ProductDetailPage extends StatelessWidget {
                   errorBuilder: (_, __, ___) => Container(
                     height: 220,
                     color: Colors.grey.shade200,
-                    child: const Center(child: Icon(Icons.broken_image_outlined, size: 80, color: appGreen)),
+                    child: const Center(
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        size: 80,
+                        color: appGreen,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -400,23 +501,38 @@ class ProductDetailPage extends StatelessWidget {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
                         product['category']?.toString() ?? '',
-                        style: TextStyle(color: appGreen, fontWeight: FontWeight.w600, fontSize: 14),
+                        style: TextStyle(
+                          color: appGreen,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   Text(
                     product['name']?.toString() ?? '',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'MK ${price.toStringAsFixed(2)}',
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: appGreen),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: appGreen,
+                    ),
                   ),
-                  if ((product['description']?.toString() ?? '').trim().isNotEmpty) ...[
+                  if ((product['description']?.toString() ?? '')
+                      .trim()
+                      .isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Text(
                       product['description']?.toString() ?? '',
-                      style: TextStyle(color: Colors.grey.shade700, height: 1.4),
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        height: 1.4,
+                      ),
                     ),
                   ],
                   const SizedBox(height: 24),
@@ -427,7 +543,10 @@ class ProductDetailPage extends StatelessWidget {
                           onPressed: () => _openEdit(context),
                           icon: const Icon(Icons.edit),
                           label: const Text('Edit'),
-                          style: OutlinedButton.styleFrom(foregroundColor: appGreen, side: const BorderSide(color: appGreen)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: appGreen,
+                            side: const BorderSide(color: appGreen),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -436,7 +555,10 @@ class ProductDetailPage extends StatelessWidget {
                           onPressed: () => _confirmDelete(context),
                           icon: const Icon(Icons.delete_outline),
                           label: const Text('Delete'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700, foregroundColor: Colors.white),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade700,
+                            foregroundColor: Colors.white,
+                          ),
                         ),
                       ),
                     ],
@@ -464,20 +586,30 @@ class ProductDetailPage extends StatelessWidget {
         title: const Text('Delete product?'),
         content: Text('Remove "${product['name']}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
     if (confirm != true) return;
-    final id = product['id'] is int ? product['id'] as int : int.tryParse(product['id']?.toString() ?? '');
+    final id = product['id'] is int
+        ? product['id'] as int
+        : int.tryParse(product['id']?.toString() ?? '');
     if (id == null) return;
     try {
       await ApiService.deleteProduct(id);
       if (context.mounted) Navigator.of(context).pop(<String, dynamic>{});
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
       }
     }
   }
@@ -496,7 +628,8 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
   final _name = TextEditingController();
   final _desc = TextEditingController();
   final _price = TextEditingController();
-  String? _selectedCategory; // One of Drinks, Kids, Stationery (from ApiConfig.productCategories)
+  String?
+  _selectedCategory; // One of Drinks, Kids, Stationery (from ApiConfig.productCategories)
   bool _saving = false;
   String? _error;
   String? _pickedFilePath;
@@ -509,9 +642,13 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
 
   List<String> get _categoryOptions {
     final list = List<String>.from(_productCategories);
-    final existing = widget.product?['category']?.toString()?.trim();
-    if (existing != null && existing.isNotEmpty && !list.any((c) => c.toLowerCase() == existing.toLowerCase())) {
-      list.add(existing); // keep existing category when editing product with other category
+    final existing = widget.product?['category']?.toString().trim();
+    if (existing != null &&
+        existing.isNotEmpty &&
+        !list.any((c) => c.toLowerCase() == existing.toLowerCase())) {
+      list.add(
+        existing,
+      ); // keep existing category when editing product with other category
     }
     return list;
   }
@@ -521,18 +658,34 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
     super.initState();
     final p = widget.product;
     if (p != null) {
-      _initialName = p['name']?.toString()?.trim() ?? '';
-      _initialDesc = p['description']?.toString()?.trim() ?? '';
-      _initialCategory = p['category']?.toString()?.trim() ?? '';
-      _initialPrice = p['price'] != null ? (p['price'] is num ? (p['price'] as num).toString() : p['price'].toString()).trim() : '';
+      _initialName = p['name']?.toString().trim() ?? '';
+      _initialDesc = p['description']?.toString().trim() ?? '';
+      _initialCategory = p['category']?.toString().trim() ?? '';
+      _initialPrice = p['price'] != null
+          ? (p['price'] is num
+                    ? (p['price'] as num).toString()
+                    : p['price'].toString())
+                .trim()
+          : '';
       _name.text = _initialName ?? '';
       _desc.text = _initialDesc ?? '';
-      final cat = p['category']?.toString()?.trim();
-      _selectedCategory = cat?.isNotEmpty == true ? cat : _productCategories.isNotEmpty ? _productCategories.first : null;
-      _price.text = p['price'] != null ? (p['price'] is num ? (p['price'] as num).toString() : p['price'].toString()) : '';
-      _existingImagePath = p['imageUrl']?.toString() ?? p['image_path']?.toString();
+      final cat = p['category']?.toString().trim();
+      _selectedCategory = cat?.isNotEmpty == true
+          ? cat
+          : _productCategories.isNotEmpty
+          ? _productCategories.first
+          : null;
+      _price.text = p['price'] != null
+          ? (p['price'] is num
+                ? (p['price'] as num).toString()
+                : p['price'].toString())
+          : '';
+      _existingImagePath =
+          p['imageUrl']?.toString() ?? p['image_path']?.toString();
     } else {
-      _selectedCategory = _productCategories.isNotEmpty ? _productCategories.first : null;
+      _selectedCategory = _productCategories.isNotEmpty
+          ? _productCategories.first
+          : null;
     }
   }
 
@@ -547,10 +700,17 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
   Future<void> _pickImage() async {
     try {
       final picker = ImagePicker();
-      final x = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1200, imageQuality: 85);
+      final x = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1200,
+        imageQuality: 85,
+      );
       if (x != null && mounted) setState(() => _pickedFilePath = x.path);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -581,20 +741,28 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
         return;
       }
     }
-    setState(() { _saving = true; _error = null; });
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
       if (widget.product != null) {
-        final id = widget.product!['id'] is int ? widget.product!['id'] as int : int.tryParse(widget.product!['id']?.toString() ?? '');
+        final id = widget.product!['id'] is int
+            ? widget.product!['id'] as int
+            : int.tryParse(widget.product!['id']?.toString() ?? '');
         if (id == null) throw Exception('Invalid product id');
         // When user only changed the image (picked new image, no text changes), send only image_path.
-        final imageOnly = _pickedFilePath != null &&
+        final imageOnly =
+            _pickedFilePath != null &&
             name == (_initialName ?? '') &&
             description == (_initialDesc ?? '') &&
             category == (_initialCategory ?? '') &&
             _price.text.trim() == (_initialPrice ?? '');
         debugPrint('[ProductForm] save edit id=$id imageOnly=$imageOnly');
         if (imageOnly) {
-          final imagePath = await ApiService.uploadProductImage(_pickedFilePath!);
+          final imagePath = await ApiService.uploadProductImage(
+            _pickedFilePath!,
+          );
           await ApiService.updateProduct(id, imagePath: imagePath);
         } else {
           // Full update: only send image_path when user picked a new image; otherwise omit.
@@ -602,26 +770,40 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
           if (_pickedFilePath != null) {
             imagePath = await ApiService.uploadProductImage(_pickedFilePath!);
           }
-          await ApiService.updateProduct(id, name: name, description: description, category: category, price: price, imagePath: imagePath);
+          await ApiService.updateProduct(
+            id,
+            name: name,
+            description: description,
+            category: category,
+            price: price,
+            imagePath: imagePath,
+          );
         }
       } else {
-        await ApiService.createProductViaPhp(
+        final imagePath = await ApiService.uploadProductImage(_pickedFilePath!);
+        await ApiService.createProduct(
           name: name,
           description: description,
           category: category,
           price: price,
-          imageFilePath: _pickedFilePath!,
+          imagePath: imagePath,
         );
       }
       if (mounted) Navigator.of(context).pop(<String, dynamic>{});
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _saving = false; });
+      if (mounted)
+        setState(() {
+          _error = e.toString().replaceFirst('Exception: ', '');
+          _saving = false;
+        });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final hasPreview = _pickedFilePath != null || (_existingImagePath != null && _existingImagePath!.trim().isNotEmpty);
+    final hasPreview =
+        _pickedFilePath != null ||
+        (_existingImagePath != null && _existingImagePath!.trim().isNotEmpty);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.product == null ? 'Add product' : 'Edit product'),
@@ -633,7 +815,14 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Product image', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+            Text(
+              'Product image',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade700,
+              ),
+            ),
             const SizedBox(height: 8),
             GestureDetector(
               onTap: _saving ? null : _pickImage,
@@ -647,14 +836,19 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: hasPreview
                     ? _pickedFilePath != null
-                        ? Image.file(File(_pickedFilePath!), fit: BoxFit.cover, width: double.infinity, height: double.infinity)
-                        : Image.network(
-                            ApiConfig.productImageUrl(_existingImagePath),
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                            errorBuilder: (_, __, ___) => _placeholder(),
-                          )
+                          ? Image.file(
+                              File(_pickedFilePath!),
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                            )
+                          : Image.network(
+                              ApiConfig.productImageUrl(_existingImagePath),
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                              errorBuilder: (_, __, ___) => _placeholder(),
+                            )
                     : _placeholder(),
               ),
             ),
@@ -662,28 +856,70 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
             TextButton.icon(
               onPressed: _saving ? null : _pickImage,
               icon: const Icon(Icons.photo_library, size: 20),
-              label: Text(_pickedFilePath != null ? 'Change image' : 'Pick image from device'),
+              label: Text(
+                _pickedFilePath != null
+                    ? 'Change image'
+                    : 'Pick image from device',
+              ),
               style: TextButton.styleFrom(foregroundColor: appGreen),
             ),
             const SizedBox(height: 16),
-            TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name *'), textCapitalization: TextCapitalization.words),
-            const SizedBox(height: 12),
-            TextField(controller: _desc, decoration: const InputDecoration(labelText: 'Description'), maxLines: 2),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _selectedCategory != null && _categoryOptions.contains(_selectedCategory) ? _selectedCategory : (_categoryOptions.isNotEmpty ? _categoryOptions.first : null),
-              decoration: const InputDecoration(labelText: 'Category *'),
-              items: _categoryOptions.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-              onChanged: _saving ? null : (v) => setState(() => _selectedCategory = v),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Name *'),
+              textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 12),
-            TextField(controller: _price, decoration: const InputDecoration(labelText: 'Price (MWK) *'), keyboardType: TextInputType.number),
-            if (_error != null) ...[const SizedBox(height: 12), Text(_error!, style: const TextStyle(color: Colors.red))],
+            TextField(
+              controller: _desc,
+              decoration: const InputDecoration(labelText: 'Description'),
+              maxLines: 2,
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value:
+                  _selectedCategory != null &&
+                      _categoryOptions.contains(_selectedCategory)
+                  ? _selectedCategory
+                  : (_categoryOptions.isNotEmpty
+                        ? _categoryOptions.first
+                        : null),
+              decoration: const InputDecoration(labelText: 'Category *'),
+              items: _categoryOptions
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: _saving
+                  ? null
+                  : (v) => setState(() => _selectedCategory = v),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _price,
+              decoration: const InputDecoration(labelText: 'Price (MWK) *'),
+              keyboardType: TextInputType.number,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+            ],
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _saving ? null : _save,
-              style: ElevatedButton.styleFrom(backgroundColor: appGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: _saving ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: appGreen,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: _saving
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Save'),
             ),
           ],
         ),
@@ -696,9 +932,16 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.add_photo_alternate, size: 56, color: Colors.grey.shade500),
+          Icon(
+            Icons.add_photo_alternate,
+            size: 56,
+            color: Colors.grey.shade500,
+          ),
           const SizedBox(height: 8),
-          Text('Tap to pick image', style: TextStyle(color: Colors.grey.shade600)),
+          Text(
+            'Tap to pick image',
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
         ],
       ),
     );
