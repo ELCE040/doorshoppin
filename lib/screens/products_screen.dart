@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../config/api_config.dart';
@@ -1133,11 +1133,11 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
   final _name = TextEditingController();
   final _desc = TextEditingController();
   final _price = TextEditingController();
-  String?
-  _selectedCategory; // One of Drinks, Kids, Stationery (from ApiConfig.productCategories)
+  String? _selectedCategory;
   bool _saving = false;
   String? _error;
   String? _pickedFilePath;
+  Uint8List? _pickedFileBytes;
   String? _existingImagePath;
   // Initial values when editing, so we can do "image only" update when nothing else changed.
   String? _initialName;
@@ -1145,15 +1145,17 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
   String? _initialCategory;
   String? _initialPrice;
 
+  // { vendorId, vendorName, priceCtrl (TextEditingController), enabled (bool) }
+  List<Map<String, dynamic>> _vendorRows = [];
+  bool _vendorsLoading = true;
+
   List<String> get _categoryOptions {
     final list = List<String>.from(_productCategories);
     final existing = widget.product?['category']?.toString().trim();
     if (existing != null &&
         existing.isNotEmpty &&
         !list.any((c) => c.toLowerCase() == existing.toLowerCase())) {
-      list.add(
-        existing,
-      ); // keep existing category when editing product with other category
+      list.add(existing);
     }
     return list;
   }
@@ -1192,6 +1194,50 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
           ? _productCategories.first
           : null;
     }
+    _loadVendors();
+  }
+
+  Future<void> _loadVendors() async {
+    try {
+      final vendors = await ApiService.getVendors(includeInactive: true);
+      // If editing, also fetch existing product-vendor assignments
+      List<Map<String, dynamic>> existing = [];
+      final productId = widget.product != null
+          ? (widget.product!['id'] is int
+              ? widget.product!['id'] as int
+              : int.tryParse(widget.product!['id']?.toString() ?? ''))
+          : null;
+      if (productId != null) {
+        try {
+          existing = await ApiService.getProductVendors(productId);
+        } catch (_) {}
+      }
+      final existingMap = <int, Map<String, dynamic>>{
+        for (final e in existing) (e['vendorId'] as num?)?.toInt() ?? 0: e,
+      };
+      final rows = vendors.map((v) {
+        final vid = (v['id'] as num?)?.toInt() ?? 0;
+        final ex = existingMap[vid];
+        final priceVal = ex != null
+            ? (ex['price'] as num?)?.toStringAsFixed(0) ?? ''
+            : '';
+        return {
+          'vendorId': vid,
+          'vendorName': v['name']?.toString() ?? 'Store',
+          'vendorType': v['type']?.toString() ?? 'store',
+          'enabled': ex != null,
+          'priceCtrl': TextEditingController(text: priceVal),
+        };
+      }).toList();
+      if (mounted) {
+        setState(() {
+          _vendorRows = rows;
+          _vendorsLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _vendorsLoading = false);
+    }
   }
 
   @override
@@ -1199,6 +1245,9 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
     _name.dispose();
     _desc.dispose();
     _price.dispose();
+    for (final row in _vendorRows) {
+      (row['priceCtrl'] as TextEditingController?)?.dispose();
+    }
     super.dispose();
   }
 
@@ -1210,7 +1259,13 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
         maxWidth: 1200,
         imageQuality: 85,
       );
-      if (x != null && mounted) setState(() => _pickedFilePath = x.path);
+      if (x != null && mounted) {
+        final bytes = await x.readAsBytes();
+        setState(() {
+          _pickedFilePath = x.path;
+          _pickedFileBytes = bytes;
+        });
+      }
     } catch (e) {
       if (mounted)
         ScaffoldMessenger.of(
@@ -1265,15 +1320,19 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
             _price.text.trim() == (_initialPrice ?? '');
         debugPrint('[ProductForm] save edit id=$id imageOnly=$imageOnly');
         if (imageOnly) {
-          final imagePath = await ApiService.uploadProductImage(
-            _pickedFilePath!,
+          final imagePath = await ApiService.uploadProductImageBytes(
+            _pickedFileBytes!,
+            _pickedFilePath!.split(RegExp(r'[/\\]')).last,
           );
           await ApiService.updateProduct(id, imagePath: imagePath);
         } else {
           // Full update: only send image_path when user picked a new image; otherwise omit.
           String? imagePath;
           if (_pickedFilePath != null) {
-            imagePath = await ApiService.uploadProductImage(_pickedFilePath!);
+            imagePath = await ApiService.uploadProductImageBytes(
+              _pickedFileBytes!,
+              _pickedFilePath!.split(RegExp(r'[/\\]')).last,
+            );
           }
           await ApiService.updateProduct(
             id,
@@ -1285,14 +1344,59 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
           );
         }
       } else {
-        final imagePath = await ApiService.uploadProductImage(_pickedFilePath!);
-        await ApiService.createProduct(
+        final imagePath = await ApiService.uploadProductImageBytes(
+          _pickedFileBytes!,
+          _pickedFilePath!.split(RegExp(r'[/\\]')).last,
+        );
+        final created = await ApiService.createProduct(
           name: name,
           description: description,
           category: category,
           price: price,
           imagePath: imagePath,
         );
+        // Assign stores to the newly created product
+        final newId = (created['id'] as num?)?.toInt();
+        if (newId != null) {
+          final enabledVendors = _vendorRows
+              .where((r) => r['enabled'] == true)
+              .map((r) {
+                final p = double.tryParse(
+                  (r['priceCtrl'] as TextEditingController).text.trim(),
+                );
+                return {
+                  'vendorId': r['vendorId'],
+                  'price': p ?? 0.0,
+                  'available': true,
+                };
+              })
+              .toList();
+          if (enabledVendors.isNotEmpty) {
+            await ApiService.updateProductVendors(newId, enabledVendors);
+          }
+        }
+      }
+      // Save vendor/store assignments for existing (edit) products
+      final savedId = widget.product != null
+          ? (widget.product!['id'] is int
+              ? widget.product!['id'] as int
+              : int.tryParse(widget.product!['id']?.toString() ?? ''))
+          : null;
+      if (savedId != null) {
+        final enabledVendors = _vendorRows
+            .where((r) => r['enabled'] == true)
+            .map((r) {
+              final p = double.tryParse(
+                (r['priceCtrl'] as TextEditingController).text.trim(),
+              );
+              return {
+                'vendorId': r['vendorId'],
+                'price': p ?? 0.0,
+                'available': true,
+              };
+            })
+            .toList();
+        await ApiService.updateProductVendors(savedId, enabledVendors);
       }
       if (mounted) Navigator.of(context).pop(<String, dynamic>{});
     } catch (e) {
@@ -1341,8 +1445,8 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: hasPreview
                     ? _pickedFilePath != null
-                          ? Image.file(
-                              File(_pickedFilePath!),
+                          ? Image.memory(
+                              _pickedFileBytes!,
                               fit: BoxFit.cover,
                               width: double.infinity,
                               height: double.infinity,
@@ -1400,9 +1504,83 @@ class _ProductFormScreenState extends State<_ProductFormScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: _price,
-              decoration: const InputDecoration(labelText: 'Price (MWK) *'),
+              decoration: const InputDecoration(labelText: 'Base price (MWK) *'),
               keyboardType: TextInputType.number,
             ),
+            const SizedBox(height: 20),
+            Text(
+              'Assign to stores',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Enable a store and set the price it sells this product at.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+            ),
+            const SizedBox(height: 8),
+            if (_vendorsLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_vendorRows.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'No stores found. Add stores first.',
+                  style: TextStyle(color: Colors.grey.shade500),
+                ),
+              )
+            else
+              ..._vendorRows.asMap().entries.map((entry) {
+                final i = entry.key;
+                final row = entry.value;
+                final enabled = row['enabled'] as bool;
+                final ctrl = row['priceCtrl'] as TextEditingController;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Checkbox(
+                        value: enabled,
+                        activeColor: appGreen,
+                        onChanged: _saving
+                            ? null
+                            : (v) => setState(
+                                () => _vendorRows[i]['enabled'] = v ?? false,
+                              ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '${row['vendorName']} (${row['vendorType']})',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      if (enabled)
+                        SizedBox(
+                          width: 110,
+                          child: TextField(
+                            controller: ctrl,
+                            enabled: !_saving,
+                            decoration: const InputDecoration(
+                              labelText: 'Price',
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 8,
+                              ),
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }),
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(_error!, style: const TextStyle(color: Colors.red)),

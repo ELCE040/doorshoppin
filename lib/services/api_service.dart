@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart'; // for debugPrint
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' as http_parser;
 import '../config/api_config.dart';
 import '../models/dashboard_model.dart';
 import '../models/order_model.dart';
@@ -514,6 +516,40 @@ class ApiService {
       throw Exception(data['error']?.toString() ?? 'Upload failed');
     final path = data['path']?.toString() ?? '';
     debugPrint('[ApiService] uploadProductImage success path=$path');
+    return path;
+  }
+
+  /// Upload image bytes. Returns path to use as product image_path.
+  static Future<String> uploadProductImageBytes(Uint8List bytes, String filename) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/admin/upload');
+    debugPrint('[ApiService] uploadProductImageBytes POST file=$filename');
+    // Derive MIME type from extension so the server's multer fileFilter accepts it.
+    final ext = filename.split('.').last.toLowerCase();
+    final mimeType = switch (ext) {
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png'           => 'image/png',
+      'webp'          => 'image/webp',
+      'gif'           => 'image/gif',
+      'avif'          => 'image/avif',
+      _               => 'image/jpeg',
+    };
+    var request = http.MultipartRequest('POST', url);
+    for (final e in _headers.entries) request.headers[e.key] = e.value;
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'image',
+        bytes,
+        filename: filename,
+        contentType: http_parser.MediaType.parse(mimeType),
+      ),
+    );
+    final streamed = await request.send();
+    final res = await http.Response.fromStream(streamed);
+    final data = _parseJson(res.body, res.statusCode, 'uploadProductImage');
+    if (res.statusCode != 200 || data['success'] != true)
+      throw Exception(data['error']?.toString() ?? 'Upload failed');
+    final path = data['path']?.toString() ?? '';
+    debugPrint('[ApiService] uploadProductImageBytes success path=$path');
     return path;
   }
 
