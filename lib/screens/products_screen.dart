@@ -9,6 +9,30 @@ List<String> get _productCategories => List.from(ApiConfig.productCategories);
 
 const Color appGreen = Color(0xFF28b244);
 
+double _asDouble(dynamic value, {double fallback = 0}) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '') ?? fallback;
+}
+
+int? _asInt(dynamic value) {
+  if (value is int) return value;
+  return int.tryParse(value?.toString() ?? '');
+}
+
+String _money(dynamic value) => 'MK ${_asDouble(value).toStringAsFixed(0)}';
+
+String _vendorTypeLabel(dynamic value) {
+  return value?.toString() == 'restaurant' ? 'Restaurant' : 'Store';
+}
+
+List<Map<String, dynamic>> _vendorListFrom(dynamic value) {
+  if (value is! List) return [];
+  return value
+      .whereType<Map>()
+      .map((vendor) => Map<String, dynamic>.from(vendor))
+      .toList();
+}
+
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key, this.showAppBar = true});
 
@@ -311,10 +335,13 @@ class _ProductGridCard extends StatelessWidget {
     final imageUrl = ApiConfig.productImageUrl(
       product['imageUrl']?.toString() ?? product['image_path']?.toString(),
     );
-    final price = product['price'] is num
-        ? (product['price'] as num).toDouble()
-        : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
+    final price = _asDouble(product['price']);
+    final lowest = product['lowestPrice'];
+    final highest = product['highestPrice'];
+    final vendorCount = _asInt(product['vendorCount']) ?? 0;
     final category = product['category']?.toString() ?? '';
+    final hasRange =
+        lowest != null && highest != null && _asDouble(lowest) != _asDouble(highest);
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -396,13 +423,25 @@ class _ProductGridCard extends StatelessWidget {
                           ),
                         ),
                       Text(
-                        'MK ${price.toStringAsFixed(0)}',
+                        hasRange
+                            ? '${_money(lowest)} - ${_money(highest)}'
+                            : 'MK ${price.toStringAsFixed(0)}',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           color: appGreen,
                           fontSize: 13,
                         ),
                       ),
+                      if (vendorCount > 0)
+                        Text(
+                          '$vendorCount ${vendorCount == 1 ? 'place' : 'places'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -426,9 +465,12 @@ class ProductDetailPage extends StatelessWidget {
     final imageUrl = ApiConfig.productImageUrl(
       product['imageUrl']?.toString() ?? product['image_path']?.toString(),
     );
-    final price = product['price'] is num
-        ? (product['price'] as num).toDouble()
-        : double.tryParse(product['price']?.toString() ?? '') ?? 0.0;
+    final price = _asDouble(product['price']);
+    final vendors = _vendorListFrom(product['vendors']);
+    final lowest = product['lowestPrice'];
+    final highest = product['highestPrice'];
+    final hasRange =
+        lowest != null && highest != null && _asDouble(lowest) != _asDouble(highest);
 
     return Scaffold(
       appBar: AppBar(
@@ -438,12 +480,15 @@ class ProductDetailPage extends StatelessWidget {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) {
-              if (v == 'edit')
+              if (v == 'stores')
+                _openPriceManager(context);
+              else if (v == 'edit')
                 _openEdit(context);
               else if (v == 'delete')
                 _confirmDelete(context);
             },
             itemBuilder: (_) => [
+              const PopupMenuItem(value: 'stores', child: Text('Store prices')),
               const PopupMenuItem(value: 'edit', child: Text('Edit')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
@@ -516,12 +561,19 @@ class ProductDetailPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'MK ${price.toStringAsFixed(2)}',
+                    hasRange
+                        ? '${_money(lowest)} - ${_money(highest)}'
+                        : 'MK ${price.toStringAsFixed(2)}',
                     style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                       color: appGreen,
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  _ProductVendorSummary(
+                    vendors: vendors,
+                    onManage: () => _openPriceManager(context),
                   ),
                   if ((product['description']?.toString() ?? '')
                       .trim()
@@ -579,6 +631,15 @@ class ProductDetailPage extends StatelessWidget {
     if (result != null && context.mounted) Navigator.of(context).pop(result);
   }
 
+  void _openPriceManager(BuildContext context) async {
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => _ProductVendorPricesScreen(product: product),
+      ),
+    );
+    if (result != null && context.mounted) Navigator.of(context).pop(result);
+  }
+
   void _confirmDelete(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -612,6 +673,450 @@ class ProductDetailPage extends StatelessWidget {
         );
       }
     }
+  }
+}
+
+class _ProductVendorSummary extends StatelessWidget {
+  const _ProductVendorSummary({
+    required this.vendors,
+    required this.onManage,
+  });
+
+  final List<Map<String, dynamic>> vendors;
+  final VoidCallback onManage;
+
+  @override
+  Widget build(BuildContext context) {
+    final activeVendors = vendors.where((vendor) {
+      final available = vendor['available'] != false && vendor['available'] != 0;
+      final active = vendor['active'] != false && vendor['active'] != 0;
+      return available && active;
+    }).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Store prices',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onManage,
+              icon: const Icon(Icons.storefront, size: 18),
+              label: const Text('Manage'),
+              style: TextButton.styleFrom(foregroundColor: appGreen),
+            ),
+          ],
+        ),
+        if (activeVendors.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Text(
+              'No store prices set',
+              style: TextStyle(color: Colors.grey.shade700),
+            ),
+          )
+        else
+          ...activeVendors.take(4).map((vendor) {
+            return ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                vendor['type']?.toString() == 'restaurant'
+                    ? Icons.restaurant
+                    : Icons.storefront,
+                color: appGreen,
+              ),
+              title: Text(vendor['name']?.toString() ?? ''),
+              subtitle: Text(_vendorTypeLabel(vendor['type'])),
+              trailing: Text(
+                _money(vendor['price']),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: appGreen,
+                ),
+              ),
+            );
+          }),
+        if (activeVendors.length > 4)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '+${activeVendors.length - 4} more',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ProductVendorPricesScreen extends StatefulWidget {
+  const _ProductVendorPricesScreen({required this.product});
+
+  final Map<String, dynamic> product;
+
+  @override
+  State<_ProductVendorPricesScreen> createState() =>
+      _ProductVendorPricesScreenState();
+}
+
+class _ProductVendorPricesScreenState
+    extends State<_ProductVendorPricesScreen> {
+  final Map<int, TextEditingController> _priceControllers = {};
+  final Set<int> _selectedVendorIds = {};
+  final Set<int> _availableVendorIds = {};
+  List<Map<String, dynamic>> _vendors = [];
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  int? get _productId => _asInt(widget.product['id']);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _priceControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final productId = _productId;
+    if (productId == null) {
+      setState(() {
+        _error = 'Invalid product id';
+        _loading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final results = await Future.wait([
+        ApiService.getVendors(includeInactive: false),
+        ApiService.getProductVendors(productId),
+      ]);
+      final allVendors = results[0];
+      final assigned = results[1];
+      final byId = <int, Map<String, dynamic>>{};
+
+      for (final vendor in allVendors) {
+        final id = _asInt(vendor['id']);
+        if (id != null) byId[id] = Map<String, dynamic>.from(vendor);
+      }
+      for (final vendor in assigned) {
+        final id = _asInt(vendor['vendorId'] ?? vendor['id']);
+        if (id != null && !byId.containsKey(id)) {
+          byId[id] = Map<String, dynamic>.from(vendor);
+        }
+      }
+
+      final assignedById = <int, Map<String, dynamic>>{};
+      for (final vendor in assigned) {
+        final id = _asInt(vendor['vendorId'] ?? vendor['id']);
+        if (id != null) assignedById[id] = vendor;
+      }
+
+      for (final entry in byId.entries) {
+        final id = entry.key;
+        final current = assignedById[id];
+        final controller = _priceControllers.putIfAbsent(
+          id,
+          () => TextEditingController(),
+        );
+        controller.text = current != null
+            ? _asDouble(current['price']).toStringAsFixed(0)
+            : _asDouble(widget.product['price']).toStringAsFixed(0);
+        if (current != null) {
+          _selectedVendorIds.add(id);
+          if (current['available'] != false && current['available'] != 0) {
+            _availableVendorIds.add(id);
+          }
+        } else {
+          _availableVendorIds.add(id);
+        }
+      }
+
+      final vendors = byId.values.toList()
+        ..sort((a, b) {
+          final typeCompare = _vendorTypeLabel(
+            a['type'],
+          ).compareTo(_vendorTypeLabel(b['type']));
+          if (typeCompare != 0) return typeCompare;
+          return (a['name']?.toString() ?? '')
+              .compareTo(b['name']?.toString() ?? '');
+        });
+
+      if (!mounted) return;
+      setState(() {
+        _vendors = vendors;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final productId = _productId;
+    if (productId == null) return;
+    if (_selectedVendorIds.isEmpty) {
+      setState(() => _error = 'Choose at least one store or restaurant');
+      return;
+    }
+
+    final payload = <Map<String, dynamic>>[];
+    for (final id in _selectedVendorIds) {
+      final price = double.tryParse(_priceControllers[id]?.text.trim() ?? '');
+      if (price == null || price < 0) {
+        setState(() => _error = 'Enter a valid price for every selected place');
+        return;
+      }
+      payload.add({
+        'vendorId': id,
+        'price': price,
+        'available': _availableVendorIds.contains(id),
+      });
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      await ApiService.updateProductVendors(productId, payload);
+      if (mounted) Navigator.of(context).pop(<String, dynamic>{});
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Store prices'),
+        backgroundColor: appGreen,
+        foregroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: _saving || _loading ? null : _save,
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: appGreen))
+          : _error != null && _vendors.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: _load,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: appGreen,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    widget.product['name']?.toString() ?? 'Product',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                Expanded(
+                  child: _vendors.isEmpty
+                      ? Center(
+                          child: Text(
+                            'Add a store or restaurant first',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
+                          itemCount: _vendors.length,
+                          itemBuilder: (context, index) {
+                            final vendor = _vendors[index];
+                            final id = _asInt(vendor['vendorId'] ?? vendor['id']);
+                            if (id == null) return const SizedBox.shrink();
+                            final selected = _selectedVendorIds.contains(id);
+                            final available = _availableVendorIds.contains(id);
+                            final controller = _priceControllers[id]!;
+                            final type = vendor['type']?.toString() ?? 'store';
+
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 4, 12, 12),
+                                child: Column(
+                                  children: [
+                                    CheckboxListTile(
+                                      value: selected,
+                                      onChanged: _saving
+                                          ? null
+                                          : (value) {
+                                              setState(() {
+                                                if (value == true) {
+                                                  _selectedVendorIds.add(id);
+                                                  _availableVendorIds.add(id);
+                                                } else {
+                                                  _selectedVendorIds.remove(id);
+                                                }
+                                              });
+                                            },
+                                      controlAffinity:
+                                          ListTileControlAffinity.leading,
+                                      secondary: Icon(
+                                        type == 'restaurant'
+                                            ? Icons.restaurant
+                                            : Icons.storefront,
+                                        color: appGreen,
+                                      ),
+                                      title: Text(vendor['name']?.toString() ?? ''),
+                                      subtitle: Text(_vendorTypeLabel(type)),
+                                    ),
+                                    if (selected)
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 48),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: TextField(
+                                                controller: controller,
+                                                enabled: !_saving,
+                                                keyboardType:
+                                                    const TextInputType.numberWithOptions(
+                                                  decimal: true,
+                                                ),
+                                                decoration:
+                                                    const InputDecoration(
+                                                  labelText: 'Price (MWK)',
+                                                  prefixIcon:
+                                                      Icon(Icons.payments),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Column(
+                                              children: [
+                                                Switch(
+                                                  value: available,
+                                                  activeColor: appGreen,
+                                                  onChanged: _saving
+                                                      ? null
+                                                      : (value) {
+                                                          setState(() {
+                                                            if (value) {
+                                                              _availableVendorIds.add(id);
+                                                            } else {
+                                                              _availableVendorIds.remove(id);
+                                                            }
+                                                          });
+                                                        },
+                                                ),
+                                                Text(
+                                                  'Available',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.grey.shade700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+      bottomNavigationBar: _loading
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: ElevatedButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.save),
+                  label: Text(_saving ? 'Saving...' : 'Save store prices'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: appGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ),
+    );
   }
 }
 

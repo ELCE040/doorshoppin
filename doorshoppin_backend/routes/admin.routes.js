@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { query } from "../config/database.js";
 import { sendFcmNotification, sendFcmToAdminTopic } from "../config/firebase-admin.js";
-import { normalizeProduct, normalizeProducts } from "../config/product-response.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -23,11 +22,179 @@ try {
 const router = express.Router();
 const debug = (tag, ...args) => console.log(`[Admin ${tag}]`, ...args);
 
-// Staff/admin uploads should go to legacy PHP uploads directory so both apps
-// can load images from https://doorshoppin.com/admin/uploads/<filename>.
+function safeJsonParse(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function humanizePaymentOutcomeReason(reason, fallbackStatus) {
+  switch (String(reason || "").toLowerCase()) {
+    case "customer_cancelled":
+      return "Customer cancelled in app";
+    case "provider_cancelled":
+      return "Cancelled by payment provider";
+    case "provider_failed":
+      return "Failed by payment provider";
+    case "timed_out":
+      return "Timed out waiting for payment";
+    case "provider_pending":
+      return "Still pending with provider";
+    case "provider_success":
+      return "Payment successful";
+    default:
+      switch (String(fallbackStatus || "").toLowerCase()) {
+        case "canceled":
+        case "cancelled":
+          return "Cancelled";
+        case "failed":
+          return "Payment failed";
+        case "pending":
+          return "Payment pending";
+        case "success":
+        case "completed":
+          return "Payment successful";
+        default:
+          return null;
+      }
+  }
+}
+
+function extractPaymentOutcome(row = {}) {
+  const parsed = safeJsonParse(row.paymentResponse || row.payment_response);
+  const outcome = parsed?.doorShoppinPayment || {};
+  const reason = outcome.reason || null;
+  const status = outcome.status || row.transactionStatus || row.transaction_status || null;
+  return {
+    paymentOutcomeStatus: status,
+    paymentOutcomeReason: reason,
+    paymentOutcomeSource: outcome.source || null,
+    paymentOutcomeProviderStatus: outcome.providerStatus || row.transactionStatus || row.transaction_status || null,
+    paymentOutcomeRecordedAt: outcome.recordedAt || null,
+    paymentOutcomeLabel: humanizePaymentOutcomeReason(reason, status),
+  };
+}
+
+function normalizeAdminImagePath(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  const pathOnly = raw.replace(/^https?:\/\/[^/]+/i, "");
+  const filename = path.basename(pathOnly.split("?")[0]);
+  const lowerPath = pathOnly.toLowerCase();
+  const hasImageExt = /\.(jpg|jpeg|png|webp|gif|avif)$/i.test(filename);
+  const isKnownUpload =
+    lowerPath.includes("/uploads/") ||
+    lowerPath.includes("/admin/uploads/") ||
+    /^product_\d+_[a-z0-9]+\.[a-z0-9]+$/i.test(filename) ||
+    (hasImageExt && !pathOnly.slice(1).includes("/"));
+
+  return isKnownUpload ? `/admin/uploads/${filename}` : raw;
+}
+
+function normalizeProductRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    imageUrl: normalizeAdminImagePath(row.imageUrl ?? row.image_path),
+  };
+}
+
+function normalizeVendorRow(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type || "store",
+    phone: row.phone || "",
+    address: row.address || "",
+    active: row.active === true || row.active === 1,
+    createdAt: row.createdAt || row.created_at || null,
+    updatedAt: row.updatedAt || row.updated_at || null,
+  };
+}
+
+async function getProductVendorMap(productIds, { includeInactive = false } = {}) {
+  const ids = [...new Set((productIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  const result = new Map(ids.map((id) => [id, []]));
+  if (ids.length === 0) return result;
+
+  const placeholders = ids.map(() => "?").join(",");
+  const activeClause = includeInactive ? "" : "AND v.active = 1 AND pv.available = 1";
+  const rows = await query(
+    `SELECT
+       pv.product_id as productId,
+       pv.vendor_id as vendorId,
+       pv.price,
+       pv.available,
+       v.name as vendorName,
+       v.type as vendorType,
+       v.phone as vendorPhone,
+       v.address as vendorAddress,
+       v.active as vendorActive
+     FROM product_vendors pv
+     JOIN vendors v ON v.id = pv.vendor_id
+     WHERE pv.product_id IN (${placeholders}) ${activeClause}
+     ORDER BY pv.price ASC, v.name ASC`,
+    ids
+  );
+
+  for (const row of rows || []) {
+    const productId = Number(row.productId);
+    const vendor = {
+      productId,
+      vendorId: Number(row.vendorId),
+      id: Number(row.vendorId),
+      name: row.vendorName,
+      type: row.vendorType || "store",
+      phone: row.vendorPhone || "",
+      address: row.vendorAddress || "",
+      price: Number(row.price),
+      available: row.available === true || row.available === 1,
+      active: row.vendorActive === true || row.vendorActive === 1,
+    };
+    if (!result.has(productId)) result.set(productId, []);
+    result.get(productId).push(vendor);
+  }
+
+  return result;
+}
+
+async function attachVendorPrices(products, options = {}) {
+  const list = Array.isArray(products) ? products : [products].filter(Boolean);
+  if (list.length === 0) return Array.isArray(products) ? [] : products;
+  const vendorMap = await getProductVendorMap(list.map((p) => p.id), options);
+  const normalized = list.map((product) => {
+    const vendors = vendorMap.get(Number(product.id)) || [];
+    const prices = vendors
+      .filter((vendor) => options.includeInactive || vendor.available)
+      .map((vendor) => Number(vendor.price))
+      .filter((price) => Number.isFinite(price));
+    const lowestPrice = prices.length ? Math.min(...prices) : null;
+    const highestPrice = prices.length ? Math.max(...prices) : null;
+    const base = normalizeProductRow(product);
+
+    return {
+      ...base,
+      basePrice: Number(product.price),
+      price: lowestPrice ?? Number(product.price),
+      lowestPrice,
+      highestPrice,
+      vendorCount: vendors.length,
+      vendors,
+    };
+  });
+
+  return Array.isArray(products) ? normalized : normalized[0];
+}
+
+// Must match server.js uploadsDir so GET /uploads/xxx finds files we save here
 const uploadsDir = process.env.ADMIN_UPLOADS_DIR
   ? path.resolve(process.env.ADMIN_UPLOADS_DIR)
-  : path.join(__dirname, "..", "..", "admin", "uploads");
+  : path.join(__dirname, "..", "uploads");
 try {
   const fs = require("fs");
   if (!fs.existsSync(uploadsDir)) {
@@ -46,7 +213,31 @@ const upload = multer({
     },
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const allowedExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"]);
+    const allowedMimes = new Set([
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "image/avif",
+    ]);
+    if (!allowedExts.has(ext) || !allowedMimes.has(file.mimetype)) {
+      return cb(new Error("Only image uploads are allowed"));
+    }
+    return cb(null, true);
+  },
 });
+
+function uploadSingleImage(req, res, next) {
+  upload.single("image")(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, error: err.message || "Upload failed" });
+    }
+    return next();
+  });
+}
 
 /** Admin-only auth: verify JWT with adminId (from admin login). No dependency on auth.middleware.js. */
 function authenticateAdmin(req, res, next) {
@@ -59,7 +250,7 @@ function authenticateAdmin(req, res, next) {
     if (!token) {
       return res.status(401).json({ success: false, error: "Invalid authorization header" });
     }
-    const secret = process.env.JWT_SECRET || "default-secret-change-me";
+    const secret = process.env.JWT_SECRET;
     const decoded = jwt.verify(token, secret);
     if (!decoded.adminId) {
       return res.status(401).json({ success: false, error: "Invalid token: admin only" });
@@ -90,7 +281,7 @@ function authenticateManager(req, res, next) {
     if (!token) {
       return res.status(401).json({ success: false, error: "Invalid authorization header" });
     }
-    const secret = process.env.JWT_SECRET || "default-secret-change-me";
+    const secret = process.env.JWT_SECRET;
     const decoded = jwt.verify(token, secret);
     if (!decoded.adminId) {
       return res.status(401).json({ success: false, error: "Invalid token: admin only" });
@@ -115,7 +306,7 @@ function authenticateManager(req, res, next) {
 
 /**
  * POST /api/admin/login
- * Body: { username, password } — username can be either username or email
+ * Body: { username, password } - username can be either username or email
  * Returns JWT with adminId for use in admin app.
  */
 router.post("/login", async (req, res) => {
@@ -156,7 +347,7 @@ router.post("/login", async (req, res) => {
     const isManager = String(admin.role || "admin").toLowerCase() === "manager";
     const token = jwt.sign(
       { adminId: admin.id, username: admin.username, isManager },
-      process.env.JWT_SECRET || "default-secret-change-me",
+      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
     debug("login success, admin id:", admin.id, "isManager:", isManager);
@@ -303,6 +494,28 @@ router.get("/dashboard", authenticateAdmin, async (req, res) => {
     const [successTx] = await query("SELECT COUNT(*) as count FROM transactions WHERE status IN ('success', 'completed')");
     const [pendingTx] = await query("SELECT COUNT(*) as count FROM transactions WHERE status = 'pending'");
     const [failedTx] = await query("SELECT COUNT(*) as count FROM transactions WHERE status = 'failed'");
+    const [canceledTx] = await query("SELECT COUNT(*) as count FROM transactions WHERE status IN ('canceled', 'cancelled')");
+    const paymentOutcomeRows = await query(
+      `SELECT status as transactionStatus, payment_response as paymentResponse
+       FROM transactions
+       WHERE payment_response IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 500`
+    );
+    const paymentOutcomeCounts = {
+      customer_cancelled: 0,
+      provider_cancelled: 0,
+      provider_failed: 0,
+      timed_out: 0,
+      provider_pending: 0,
+      provider_success: 0,
+      unknown: 0,
+    };
+    for (const row of paymentOutcomeRows || []) {
+      const outcome = extractPaymentOutcome(row);
+      const key = outcome.paymentOutcomeReason || "unknown";
+      paymentOutcomeCounts[key] = (paymentOutcomeCounts[key] || 0) + 1;
+    }
 
     debug("Dashboard", "success");
     return res.json({
@@ -329,6 +542,8 @@ router.get("/dashboard", authenticateAdmin, async (req, res) => {
         successfulTransactions: successTx?.count ?? 0,
         pendingTransactions: pendingTx?.count ?? 0,
         failedTransactions: failedTx?.count ?? 0,
+        canceledTransactions: canceledTx?.count ?? 0,
+        paymentOutcomeCounts,
         ordersLast7: ordersData.reduce((a, b) => a + b, 0),
         usersLast7: usersData.reduce((a, b) => a + b, 0),
         totalProducts: categoryData.reduce((a, b) => a + b, 0),
@@ -344,17 +559,24 @@ router.get("/dashboard", authenticateAdmin, async (req, res) => {
  * GET /api/admin/orders
  * Returns all orders with items summary (for admin app). No auth required for now; add middleware if needed.
  */
-router.get("/orders", async (req, res) => {
+router.get("/orders", authenticateAdmin, async (req, res) => {
   try {
     debug("Orders", "GET list");
     const ordersRows = await query(
       `SELECT 
         o.id, o.user_id as userId, o.status, o.payment_status as paymentStatus, o.payment_method as paymentMethod,
+        o.payment_transaction_id as paymentTransactionId,
         o.total_amount as totalAmount, o.subtotal, o.delivery_fee as deliveryFee, o.service_fee as serviceFee,
         o.latitude, o.longitude, o.address, o.place_description as placeDescription,
         o.customer_name as customerName, o.customer_phone as customerPhone, o.customer_email as customerEmail,
-        o.order_tracking_id as orderTrackingId, o.created_at as createdAt, o.admin_id as adminId
+        o.order_tracking_id as orderTrackingId, o.created_at as createdAt, o.admin_id as adminId,
+        t.status as transactionStatus,
+        t.provider_reference as paymentProviderReference,
+        t.payment_response as paymentResponse
       FROM orders o
+      LEFT JOIN transactions t
+        ON t.charge_id = o.payment_transaction_id
+        OR t.transaction_id = o.payment_transaction_id
       ORDER BY o.created_at DESC`
     );
     const orders = [];
@@ -363,13 +585,67 @@ router.get("/orders", async (req, res) => {
         "SELECT product_id as productId, product_name as productName, quantity, unit_price as unitPrice, subtotal FROM order_items WHERE order_id = ? ORDER BY id",
         [row.id]
       );
-      orders.push({ ...row, items: items || [] });
+      const {
+        paymentResponse,
+        ...safeRow
+      } = row;
+      orders.push({
+        ...safeRow,
+        ...extractPaymentOutcome(row),
+        items: items || [],
+      });
     }
     debug("Orders", "success count=", orders.length);
     return res.json({ success: true, data: orders });
   } catch (err) {
     console.error("Admin orders list error:", err);
     return res.status(500).json({ success: false, error: "Failed to fetch orders" });
+  }
+});
+
+/**
+ * GET /api/admin/transactions
+ * Returns recent payment attempts with DoorShoppin outcome reason.
+ */
+router.get("/transactions", authenticateAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const rows = await query(
+      `SELECT
+        id,
+        transaction_id as transactionId,
+        charge_id as chargeId,
+        user_email as userEmail,
+        phone_number as phoneNumber,
+        first_name as firstName,
+        last_name as lastName,
+        amount,
+        method,
+        payment_provider as paymentProvider,
+        payment_mode as paymentMode,
+        status as transactionStatus,
+        provider_reference as paymentProviderReference,
+        payment_response as paymentResponse,
+        created_at as createdAt,
+        updated_at as updatedAt
+      FROM transactions
+      ORDER BY created_at DESC
+      LIMIT ?`,
+      [limit]
+    );
+
+    const data = (rows || []).map((row) => {
+      const { paymentResponse, ...safeRow } = row;
+      return {
+        ...safeRow,
+        ...extractPaymentOutcome(row),
+      };
+    });
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error("Admin transactions list error:", err);
+    return res.status(500).json({ success: false, error: "Failed to fetch transactions" });
   }
 });
 
@@ -430,7 +706,7 @@ router.patch("/orders/:id/status", authenticateAdmin, async (req, res) => {
 
     let fcmToken = null;
 
-    // 1. By user_id — skip guest (id=1)
+    // 1. By user_id - skip guest (id=1)
     const uid = Number(order.user_id);
     if (!isNaN(uid) && uid > 1) {
       const userRows = await query(
@@ -449,7 +725,7 @@ router.patch("/orders/:id/status", authenticateAdmin, async (req, res) => {
       if (userRows.length > 0) fcmToken = userRows[0].fcm_token;
     }
 
-    // 3. By phone — all normalised variants
+    // 3. By phone - all normalised variants
     if (!fcmToken && order.customer_phone) {
       const raw = order.customer_phone.replace(/\D/g, "");
       const local = normalizePhone(raw);
@@ -465,7 +741,7 @@ router.patch("/orders/:id/status", authenticateAdmin, async (req, res) => {
       if (userRows.length > 0) fcmToken = userRows[0].fcm_token;
     }
 
-    console.log(`[FCM] Admin status update order ${orderId} → token ${fcmToken ? "FOUND" : "NOT FOUND"}`);
+    console.log(`[FCM] Admin status update order ${orderId} -> token ${fcmToken ? "FOUND" : "NOT FOUND"}`);
 
     const statusMessages = {
       pending:          { title: "Order Received",   body: `Your order ${tracking} has been received.` },
@@ -507,7 +783,7 @@ router.patch("/orders/:id/status", authenticateAdmin, async (req, res) => {
  * Body: { orderId, orderTrackingId, status, total, adminName }
  * Sends an FCM notification to all admin devices (admin_orders topic).
  */
-router.post("/order-status", async (req, res) => {
+router.post("/order-status", authenticateAdmin, async (req, res) => {
   try {
     const { orderId, orderTrackingId, status, total, adminName } = req.body || {};
 
@@ -544,12 +820,203 @@ router.post("/order-status", async (req, res) => {
   }
 });
 
+/* ----------------------------------------
+   ADMIN VENDORS: stores and restaurants
+---------------------------------------- */
+router.get("/vendors", authenticateAdmin, async (req, res) => {
+  try {
+    const { type, includeInactive } = req.query;
+    const where = [];
+    const params = [];
+    if (type && type !== "all") {
+      where.push("type = ?");
+      params.push(String(type).toLowerCase());
+    }
+    if (includeInactive !== "true") {
+      where.push("active = 1");
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = await query(
+      `SELECT id, name, type, phone, address, active, created_at as createdAt, updated_at as updatedAt
+       FROM vendors
+       ${whereSql}
+       ORDER BY active DESC, type ASC, name ASC`,
+      params
+    );
+    return res.json({ success: true, data: (rows || []).map(normalizeVendorRow) });
+  } catch (err) {
+    console.error("Admin vendors list error:", err);
+    return res.status(500).json({ success: false, error: "Failed to fetch vendors" });
+  }
+});
+
+router.post("/vendors", authenticateAdmin, async (req, res) => {
+  try {
+    const { name, type = "store", phone = "", address = "" } = req.body || {};
+    const vendorName = String(name || "").trim();
+    const vendorType = String(type || "store").trim().toLowerCase();
+    if (!vendorName) {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+    if (!["store", "restaurant"].includes(vendorType)) {
+      return res.status(400).json({ success: false, error: "type must be store or restaurant" });
+    }
+
+    const result = await query(
+      "INSERT INTO vendors (name, type, phone, address, active) VALUES (?, ?, ?, ?, 1)",
+      [vendorName, vendorType, String(phone).trim(), String(address).trim()]
+    );
+    const rows = await query(
+      "SELECT id, name, type, phone, address, active, created_at as createdAt, updated_at as updatedAt FROM vendors WHERE id = ?",
+      [result.insertId]
+    );
+    return res.status(201).json({ success: true, data: normalizeVendorRow(rows?.[0]) });
+  } catch (err) {
+    console.error("Admin vendor create error:", err);
+    return res.status(500).json({ success: false, error: "Failed to create vendor" });
+  }
+});
+
+router.put("/vendors/:id", authenticateAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, type, phone, address, active } = req.body || {};
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ success: false, error: "Invalid vendor id" });
+    }
+
+    const updates = [];
+    const values = [];
+    if (name !== undefined) {
+      const vendorName = String(name).trim();
+      if (!vendorName) return res.status(400).json({ success: false, error: "name is required" });
+      updates.push("name = ?");
+      values.push(vendorName);
+    }
+    if (type !== undefined) {
+      const vendorType = String(type).trim().toLowerCase();
+      if (!["store", "restaurant"].includes(vendorType)) {
+        return res.status(400).json({ success: false, error: "type must be store or restaurant" });
+      }
+      updates.push("type = ?");
+      values.push(vendorType);
+    }
+    if (phone !== undefined) {
+      updates.push("phone = ?");
+      values.push(String(phone).trim());
+    }
+    if (address !== undefined) {
+      updates.push("address = ?");
+      values.push(String(address).trim());
+    }
+    if (active !== undefined) {
+      updates.push("active = ?");
+      values.push(active === true || active === 1 || active === "1" || active === "true" ? 1 : 0);
+    }
+
+    if (updates.length > 0) {
+      updates.push("updated_at = NOW()");
+      values.push(id);
+      await query(`UPDATE vendors SET ${updates.join(", ")} WHERE id = ?`, values);
+    }
+
+    const rows = await query(
+      "SELECT id, name, type, phone, address, active, created_at as createdAt, updated_at as updatedAt FROM vendors WHERE id = ?",
+      [id]
+    );
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Vendor not found" });
+    }
+    return res.json({ success: true, data: normalizeVendorRow(rows[0]) });
+  } catch (err) {
+    console.error("Admin vendor update error:", err);
+    return res.status(500).json({ success: false, error: "Failed to update vendor" });
+  }
+});
+
+router.delete("/vendors/:id", authenticateAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ success: false, error: "Invalid vendor id" });
+    }
+    await query("UPDATE vendors SET active = 0, updated_at = NOW() WHERE id = ?", [id]);
+    return res.json({ success: true, deleted: true, id });
+  } catch (err) {
+    console.error("Admin vendor delete error:", err);
+    return res.status(500).json({ success: false, error: "Failed to remove vendor" });
+  }
+});
+
+router.get("/products/:id/vendors", authenticateAdmin, async (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isInteger(productId) || productId < 1) {
+      return res.status(400).json({ success: false, error: "Invalid product id" });
+    }
+    const vendorMap = await getProductVendorMap([productId], { includeInactive: true });
+    return res.json({ success: true, data: vendorMap.get(productId) || [] });
+  } catch (err) {
+    console.error("Admin product vendors get error:", err);
+    return res.status(500).json({ success: false, error: "Failed to fetch product vendors" });
+  }
+});
+
+router.put("/products/:id/vendors", authenticateAdmin, async (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    const vendorPrices = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
+    if (!Number.isInteger(productId) || productId < 1) {
+      return res.status(400).json({ success: false, error: "Invalid product id" });
+    }
+
+    const productRows = await query("SELECT id FROM products WHERE id = ?", [productId]);
+    if (!productRows || productRows.length === 0) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+
+    const clean = [];
+    for (const entry of vendorPrices) {
+      const vendorId = Number(entry.vendorId ?? entry.id);
+      const price = Number(entry.price);
+      const available = entry.available === false || entry.available === 0 || entry.available === "0" ? 0 : 1;
+      if (!Number.isInteger(vendorId) || vendorId < 1) continue;
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({ success: false, error: "Vendor prices must be non-negative numbers" });
+      }
+      clean.push({ vendorId, price, available });
+    }
+
+    await query("DELETE FROM product_vendors WHERE product_id = ?", [productId]);
+    for (const entry of clean) {
+      await query(
+        `INSERT INTO product_vendors (product_id, vendor_id, price, available, updated_at)
+         VALUES (?, ?, ?, ?, NOW())`,
+        [productId, entry.vendorId, entry.price, entry.available]
+      );
+    }
+
+    if (clean.length > 0) {
+      const lowest = Math.min(...clean.filter((v) => v.available).map((v) => v.price));
+      if (Number.isFinite(lowest)) {
+        await query("UPDATE products SET price = ? WHERE id = ?", [lowest, productId]);
+      }
+    }
+
+    const vendorMap = await getProductVendorMap([productId], { includeInactive: true });
+    return res.json({ success: true, data: vendorMap.get(productId) || [] });
+  } catch (err) {
+    console.error("Admin product vendors update error:", err);
+    return res.status(500).json({ success: false, error: "Failed to update product vendors" });
+  }
+});
+
 /**
  * POST /api/admin/upload
  * Multipart form: field name "image" (file from device).
  * Returns { success: true, path: "/admin/uploads/filename" } for use as product image_path.
  */
-router.post("/upload", authenticateAdmin, upload.single("image"), (req, res) => {
+router.post("/upload", authenticateAdmin, uploadSingleImage, (req, res) => {
   try {
     if (!req.file) {
       debug("Upload", "no file");
@@ -599,9 +1066,10 @@ router.get("/products", async (req, res) => {
     );
     const total = countResult.total;
     debug("Products", "success count=", products.length, "total=", total);
+    const productsWithVendors = await attachVendorPrices(products || [], { includeInactive: true });
     return res.json({
       success: true,
-      data: normalizeProducts(req, products),
+      data: productsWithVendors,
       pagination: {
         total,
         limit: parseInt(limit, 10),
@@ -629,7 +1097,7 @@ router.get("/products/:id", async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: "Product not found" });
     }
-    return res.json({ success: true, data: normalizeProduct(req, rows[0]) });
+    return res.json({ success: true, data: await attachVendorPrices(normalizeProductRow(rows[0]), { includeInactive: true }) });
   } catch (err) {
     console.error("Admin product get error:", err);
     return res.status(500).json({ success: false, error: "Failed to fetch product" });
@@ -675,7 +1143,19 @@ router.post("/products", authenticateAdmin, async (req, res) => {
       [insertId]
     );
     const row = Array.isArray(rows) ? rows[0] : rows;
-    return res.status(201).json({ success: true, data: normalizeProduct(req, row ?? null) });
+    const product = normalizeProductRow(row ?? null);
+    if (product?.id) {
+      await query(
+        `INSERT INTO product_vendors (product_id, vendor_id, price, available, updated_at)
+         SELECT ?, id, ?, 1, NOW()
+         FROM vendors
+         WHERE active = 1
+         ORDER BY id ASC
+         LIMIT 1`,
+        [product.id, priceNum]
+      );
+    }
+    return res.status(201).json({ success: true, data: await attachVendorPrices(product, { includeInactive: true }) });
   } catch (err) {
     console.error("Admin product create error:", err);
     return res.status(500).json({ success: false, error: "Failed to create product" });
@@ -688,12 +1168,12 @@ router.post("/products", authenticateAdmin, async (req, res) => {
   Body: { name?, description?, category?, price?, image_path? }
   Requires: Authorization Bearer <admin JWT>
 ---------------------------------------- */
-router.put("/products/:id", authenticateAdmin, upload.single("image"), async (req, res) => {
+router.put("/products/:id", authenticateAdmin, uploadSingleImage, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, category, price, image_path } = req.body || {};
     const bodyKeys = Object.keys(req.body || {}).filter((k) => req.body[k] !== undefined);
-    const uploadedPath = req.file ? "/uploads/" + req.file.filename : null;
+    const uploadedPath = req.file ? "/admin/uploads/" + req.file.filename : null;
     debug(
       "ProductUpdate",
       "PUT id=",
@@ -747,7 +1227,7 @@ router.put("/products/:id", authenticateAdmin, upload.single("image"), async (re
         [id]
       );
       const row = Array.isArray(rows) ? rows[0] : rows;
-      return res.json({ success: true, data: normalizeProduct(req, row ?? null) });
+      return res.json({ success: true, data: await attachVendorPrices(normalizeProductRow(row ?? null), { includeInactive: true }) });
     }
     values.push(id);
     await query(
@@ -760,7 +1240,7 @@ router.put("/products/:id", authenticateAdmin, upload.single("image"), async (re
     );
     const row = Array.isArray(rows) ? rows[0] : rows;
     debug("ProductUpdate", "success id=", id);
-    return res.json({ success: true, data: normalizeProduct(req, row ?? null) });
+    return res.json({ success: true, data: await attachVendorPrices(normalizeProductRow(row ?? null), { includeInactive: true }) });
   } catch (err) {
     console.error("Admin product update error:", err);
     return res.status(500).json({ success: false, error: "Failed to update product" });

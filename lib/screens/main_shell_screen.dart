@@ -4,6 +4,7 @@ import 'login_screen.dart';
 import 'dashboard_screen.dart';
 import 'orders_list_screen.dart';
 import 'products_screen.dart';
+import 'vendors_screen.dart';
 import 'hr_screen.dart';
 import 'notifications_screen.dart';
 
@@ -32,7 +33,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
   Future<void> _loadRole() async {
     final isManager = await AuthService.isManager();
     if (mounted) {
-      final count = isManager ? 4 : 3;
+      final count = isManager ? 5 : 4;
       setState(() {
         _isManager = isManager;
         _loadingRole = false;
@@ -53,6 +54,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
       case 2:
         return const ProductsScreen(showAppBar: false);
       case 3:
+        return const VendorsScreen(showAppBar: false);
+      case 4:
         return const HrScreen(showAppBar: false);
       default:
         return DashboardScreen(showAppBar: false, onNavigateToOrders: () => setState(() => _currentIndex = 1));
@@ -71,6 +74,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
       _NavItem(icon: Icons.home, label: 'Home'),
       _NavItem(icon: Icons.receipt_long, label: 'Orders'),
       _NavItem(icon: Icons.inventory_2, label: 'Products'),
+      _NavItem(icon: Icons.storefront, label: 'Stores'),
       if (_isManager) _NavItem(icon: Icons.people, label: 'HR'),
     ];
     return Scaffold(
@@ -116,7 +120,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
 
   int _effectiveIndex(int logical, int count) {
     if (count <= 0) return 0;
-    return logical.clamp(0, count - 1);
+    return logical.clamp(0, count - 1).toInt();
   }
 
   String _appBarTitle() {
@@ -129,6 +133,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
       case 2:
         return 'Products';
       case 3:
+        return 'Stores';
+      case 4:
         return 'HR';
       default:
         return 'DoorShoppin';
